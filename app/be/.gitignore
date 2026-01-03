@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.h5
+*.hdf5
+*.pkl
+*.joblib
+models/
+.DS_Store
+.env
+

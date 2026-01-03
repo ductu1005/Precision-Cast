@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./app/be
+      dockerfile: Dockerfile
+    container_name: precisioncast-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=/app/models/casting_classifier.h5
+    volumes:
+      # Mount thư mục models để có thể thêm model file
+      - ./models:/app/models
+      # Mount code để development (có thể bỏ trong production)
+      - ./app/be:/app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./app/fe
+      dockerfile: Dockerfile
+    container_name: precisioncast-frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  default:
+    name: precisioncast-network
+
