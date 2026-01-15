@@ -90,41 +90,47 @@ def preprocess_image(image: Image.Image) -> np.ndarray:
     
     return img_array
 
-def predict_image(model, image: Image.Image) -> Tuple[str, float]:
+def predict_image(model, image: Image.Image) -> Tuple[str, float, float, int]:
     """
-    Dự đoán ảnh và trả về status và confidence
+    Dự đoán ảnh và trả về status, confidence, raw_score và inference_time
     
     Args:
         model: Loaded TensorFlow/Keras model
         image: PIL Image object
         
     Returns:
-        Tuple (status, confidence)
+        Tuple (status, confidence, raw_score, inference_time_ms)
         - status: "defective" hoặc "ok"
         - confidence: Độ tin cậy (0-1)
+        - raw_score: Raw output từ model
+        - inference_time_ms: Thời gian inference (milliseconds)
     """
+    import time
+    
     # Tiền xử lý ảnh
     processed_image = preprocess_image(image)
     
-    # Dự đoán
+    # Đo thời gian inference
+    start_time = time.time()
     prediction = model.predict(processed_image, verbose=0)
+    inference_time_ms = int((time.time() - start_time) * 1000)
     
     # Lấy confidence score
     # Giả sử model output là probability của lớp "defective" (sigmoid output)
-    confidence = float(prediction[0][0])
+    raw_score = float(prediction[0][0])
     
     # Xác định status
     # Nếu confidence > 0.5 -> defective, ngược lại -> ok
     # (Có thể điều chỉnh threshold tùy theo model thực tế)
     threshold = 0.5
-    if confidence > threshold:
+    if raw_score > threshold:
         status = "defective"
         # Confidence của lớp defective
-        final_confidence = confidence
+        final_confidence = raw_score
     else:
         status = "ok"
         # Confidence của lớp ok = 1 - confidence của defective
-        final_confidence = 1 - confidence
+        final_confidence = 1 - raw_score
     
-    return status, final_confidence
+    return status, final_confidence, raw_score, inference_time_ms
 
