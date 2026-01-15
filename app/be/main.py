@@ -51,19 +51,25 @@ async def startup_event():
         # Load model
         model = load_model()
         logger.info("Model loaded successfully")
-        
-        # Initialize database
-        init_db()
-        logger.info("Database initialized")
-        
-        # Initialize MinIO bucket
-        init_bucket()
-        logger.info("MinIO initialized")
-        
     except Exception as e:
-        logger.error(f"Error during startup: {e}")
-        # Trong production, có thể không khởi động nếu không load được model
+        logger.error(f"Error loading model: {e}")
+        # Model là bắt buộc, nếu không load được thì không start server
         raise
+    
+    # Database và MinIO là optional khi chạy standalone (không có Docker)
+    db_initialized = init_db()
+    if db_initialized:
+        logger.info("Database initialized successfully")
+    else:
+        logger.warning("Database not available (will skip DB features)")
+        logger.info("Tip: Start MariaDB with Docker or set DB_HOST environment variable")
+    
+    minio_initialized = init_bucket()
+    if minio_initialized:
+        logger.info("MinIO initialized successfully")
+    else:
+        logger.warning("MinIO not available (will skip image storage)")
+        logger.info("Tip: Start MinIO with Docker or set MINIO_ENDPOINT environment variable")
 
 @app.get("/")
 async def root():
@@ -128,69 +134,87 @@ async def predict(
         # Predict với thông tin chi tiết
         status, confidence, raw_score, inference_time_ms = predict_image(model, image)
         
-        # Upload ảnh lên MinIO
+        # Upload ảnh lên MinIO (optional)
+        image_path = None
         try:
             image_path = upload_image(contents, file.filename)
         except Exception as e:
-            logger.error(f"Error uploading to MinIO: {e}")
-            image_path = f"error/{file.filename}"  # Fallback path
+            logger.warning(f"MinIO not available, skipping image upload: {e}")
+            image_path = f"local/{file.filename}"  # Fallback path
         
-        # Tạo hoặc lấy product record
-        product = None
-        if product_code or batch_code:
-            # Kiểm tra xem product đã tồn tại chưa
-            existing_product = db.query(Product).filter(
-                Product.product_code == product_code,
-                Product.batch_code == batch_code
-            ).first()
-            
-            if existing_product:
-                product = existing_product
-            else:
-                product = Product(
-                    product_code=product_code,
-                    batch_code=batch_code
+        # Lưu vào database nếu có (optional)
+        inspection_id = None
+        product_id = None
+        if db is not None:  # Kiểm tra database có sẵn không
+            try:
+                # Tạo hoặc lấy product record
+                product = None
+                if product_code or batch_code:
+                    # Kiểm tra xem product đã tồn tại chưa
+                    existing_product = db.query(Product).filter(
+                        Product.product_code == product_code,
+                        Product.batch_code == batch_code
+                    ).first()
+                    
+                    if existing_product:
+                        product = existing_product
+                    else:
+                        product = Product(
+                            product_code=product_code,
+                            batch_code=batch_code
+                        )
+                        db.add(product)
+                        db.flush()  # Để lấy product.id
+                
+                # Lưu kết quả inspection vào database
+                inspection = InspectionResult(
+                    product_id=product.id if product else None,
+                    image_path=image_path or f"local/{file.filename}",
+                    prediction=status,
+                    confidence=float(confidence)
                 )
-                db.add(product)
-                db.flush()  # Để lấy product.id
-        
-        # Lưu kết quả inspection vào database
-        inspection = InspectionResult(
-            product_id=product.id if product else None,
-            image_path=image_path,
-            prediction=status,
-            confidence=float(confidence)
-        )
-        db.add(inspection)
-        db.flush()  # Để lấy inspection.id
-        
-        # Lưu prediction log
-        log = PredictionLog(
-            inspection_id=inspection.id,
-            raw_score=raw_score,
-            threshold=THRESHOLD,
-            inference_time_ms=inference_time_ms
-        )
-        db.add(log)
-        
-        # Commit transaction
-        db.commit()
-        
-        logger.info(f"Inspection saved: ID={inspection.id}, Status={status}, Confidence={confidence}")
+                db.add(inspection)
+                db.flush()  # Để lấy inspection.id
+                
+                # Lưu prediction log
+                log = PredictionLog(
+                    inspection_id=inspection.id,
+                    raw_score=raw_score,
+                    threshold=THRESHOLD,
+                    inference_time_ms=inference_time_ms
+                )
+                db.add(log)
+                
+                # Commit transaction
+                db.commit()
+                
+                inspection_id = inspection.id
+                product_id = product.id if product else None
+                logger.info(f"Inspection saved: ID={inspection_id}, Status={status}, Confidence={confidence}")
+            except Exception as db_error:
+                logger.warning(f"Database error, skipping save: {db_error}")
+                if db:
+                    db.rollback()
+        else:
+            logger.info("Database not available, prediction completed without saving")
         
         # Trả về kết quả
         return JSONResponse({
             "status": status,
             "confidence": float(confidence),
-            "inspection_id": inspection.id,
-            "product_id": product.id if product else None
+            "inspection_id": inspection_id,
+            "product_id": product_id
         })
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error processing image: {e}", exc_info=True)
-        db.rollback()
+        if db:
+            try:
+                db.rollback()
+            except:
+                pass
         raise HTTPException(
             status_code=500,
             detail=f"Lỗi khi xử lý ảnh: {str(e)}"
@@ -217,6 +241,12 @@ async def get_inspections(
     Returns:
         Danh sách các inspection results
     """
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database service unavailable. Please ensure MariaDB is running."
+        )
+    
     try:
         query = db.query(InspectionResult).join(Product, InspectionResult.product_id == Product.id, isouter=True)
         
@@ -288,6 +318,12 @@ async def get_product_inspections(
     Returns:
         Danh sách các inspection results của sản phẩm
     """
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database service unavailable. Please ensure MariaDB is running."
+        )
+    
     try:
         # Kiểm tra product có tồn tại không
         product = db.query(Product).filter(Product.id == product_id).first()
@@ -340,6 +376,18 @@ async def get_product_inspections(
 
 
 if __name__ == "__main__":
+    import signal
+    import sys
+    
+    def signal_handler(sig, frame):
+        """Handle Ctrl+C gracefully"""
+        logger.info("\nShutting down server...")
+        sys.exit(0)
+    
+    # Register signal handler for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
@@ -347,4 +395,3 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
-

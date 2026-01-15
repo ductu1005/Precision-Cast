@@ -3,10 +3,11 @@ Database connection và models cho PrecisionCast
 """
 
 import os
-from sqlalchemy import create_engine, Column, BigInteger, String, Text, Enum, DECIMAL, Integer, Float, TIMESTAMP, ForeignKey
+from sqlalchemy import create_engine, Column, BigInteger, String, Text, Enum, DECIMAL, Integer, Float, TIMESTAMP, ForeignKey, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from sqlalchemy.sql import func
+from sqlalchemy.pool import QueuePool
 import pymysql
 import logging
 
@@ -19,15 +20,24 @@ DB_USER = os.getenv("DB_USER", "precisioncast")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "precisioncast123")
 DB_NAME = os.getenv("DB_NAME", "precisioncast")
 
-# Tạo connection string
-DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Tạo connection string với charset cho MariaDB
+DATABASE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}?charset=utf8mb4"
 
-# Tạo engine
+# Tạo engine với connection pool
+# pool_pre_ping=True để tự động test connection trước khi dùng
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True,
-    pool_recycle=3600,
-    echo=False
+    poolclass=QueuePool,
+    pool_pre_ping=True,  # Tự động test connection, reconnect nếu cần
+    pool_size=5,  # Số connection trong pool
+    max_overflow=10,  # Số connection tối đa khi cần
+    pool_recycle=3600,  # Recycle connection sau 1 giờ
+    echo=False,
+    connect_args={
+        "connect_timeout": 5,  # Timeout 5 giây
+        "charset": "utf8mb4",
+        "init_command": "SET sql_mode='STRICT_TRANS_TABLES'"
+    }
 )
 
 # Session factory
@@ -83,20 +93,60 @@ class PredictionLog(Base):
 
 
 def get_db():
-    """Dependency để lấy database session"""
-    db = SessionLocal()
+    """Dependency để lấy database session
+    
+    Yields:
+        Session: Database session
+        
+    Note:
+        Nếu database không có, sẽ yield None và endpoint sẽ handle
+    """
+    db = None
     try:
+        db = SessionLocal()
+        # Test connection ngay
+        db.execute(text("SELECT 1"))
         yield db
+    except Exception as e:
+        logger.warning(f"Database not available: {e}")
+        if db:
+            try:
+                db.close()
+            except:
+                pass
+        # Yield None để endpoint có thể check và handle
+        yield None
     finally:
-        db.close()
+        if db:
+            try:
+                db.close()
+            except:
+                pass
 
 
 def init_db():
-    """Khởi tạo database tables (nếu chưa tồn tại)"""
+    """Khởi tạo database tables (nếu chưa tồn tại)
+    
+    Returns:
+        bool: True nếu thành công, False nếu có lỗi
+    """
     try:
+        # Test connection trước (SQLAlchemy 2.0 syntax)
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT 1"))
+            result.fetchone()  # Fetch result để đảm bảo connection hoạt động
+        
+        # Nếu kết nối thành công, tạo tables
         Base.metadata.create_all(bind=engine)
         logger.info("Database tables initialized successfully")
+        return True
     except Exception as e:
-        logger.error(f"Error initializing database: {e}")
-        raise
-
+        error_msg = str(e)
+        # Log chi tiết hơn để debug
+        if "Lost connection" in error_msg or "Can't connect" in error_msg:
+            logger.warning(f"Database not available at {DB_HOST}:{DB_PORT}, skipping initialization")
+            logger.info("Tip: Start MariaDB with: docker-compose up -d mariadb")
+        else:
+            logger.warning(f"Database initialization error: {error_msg}")
+        # Không raise exception để server vẫn có thể chạy mà không có database
+        return False
