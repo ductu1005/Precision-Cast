@@ -53,11 +53,11 @@ async def startup_event():
         logger.info("Model loaded successfully")
         
         # Initialize database
-        init_db()
+        # init_db()
         logger.info("Database initialized")
         
         # Initialize MinIO bucket
-        init_bucket()
+        # init_bucket()
         logger.info("MinIO initialized")
         
     except Exception as e:
