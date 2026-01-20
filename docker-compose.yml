@@ -48,7 +48,6 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - MODEL_PATH=/app/models/casting_classifier.h5
       - DB_HOST=mariadb
       - DB_PORT=3306
       - DB_USER=precisioncast
@@ -58,6 +57,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - MINIO_BUCKET=precisioncast-images
+      - AI_WORKER_URL=http://ai_worker:8001
     volumes:
       # Mount thư mục models để có thể thêm model file
       - ./models:/app/models
@@ -85,10 +85,27 @@ services:
       - "8501:8501"
     environment:
       - API_URL=http://backend:8000
+    volumes:
+      # Mount code để development (có thể bỏ trong production)
+      - ./app/fe:/app
     depends_on:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+  ai_worker:
+    build:
+      context: ./workers 
+      dockerfile: Dockerfile
+    container_name: precisioncast-worker
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - MODEL_PATH=/models/casting_model_v1.h5
+    volumes:
+      - ./workers:/app
+      - ./models:/app/models # Mount model vào đây để worker đọc
 
 volumes:
   mariadb_data:

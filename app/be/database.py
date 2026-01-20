@@ -57,7 +57,7 @@ class InspectionResult(Base):
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     product_id = Column(BigInteger, ForeignKey('products.id', ondelete='SET NULL'), comment='Tham chiếu tới sản phẩm')
     image_path = Column(Text, nullable=False, comment='Đường dẫn ảnh')
-    prediction = Column(Enum('ok', 'defective', name='prediction_enum'), nullable=False, comment='Kết quả dự đoán')
+    prediction = Column(Enum('OK', 'DEFECTIVE', 'PENDING', 'ERROR', name='prediction_enum'), nullable=False, comment='Kết quả dự đoán')
     confidence = Column(DECIMAL(5, 4), comment='Độ tin cậy (0-1)')
     inspected_at = Column(TIMESTAMP, server_default=func.now(), comment='Thời điểm inference')
     created_at = Column(TIMESTAMP, server_default=func.now())

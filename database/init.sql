@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS inspection_results
     id           BIGINT AUTO_INCREMENT PRIMARY KEY,
     product_id   BIGINT COMMENT 'Tham chiếu tới sản phẩm được kiểm tra',
     image_path   TEXT                     NOT NULL COMMENT 'Đường dẫn ảnh',
-    prediction   ENUM ('ok', 'defective') NOT NULL COMMENT 'Kết quả dự đoán của AI',
+    prediction   ENUM ('OK', 'DEFECTIVE', 'PENDING', 'ERROR') NOT NULL COMMENT 'Kết quả dự đoán của AI',
     confidence   DECIMAL(5, 4) COMMENT 'Độ tin cậy của dự đoán (0-1)',
     inspected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT 'Thời điểm AI thực hiện inference',
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

@@ -12,7 +12,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Đường dẫn mặc định đến model (có thể override bằng biến môi trường)
-MODEL_PATH = os.getenv("MODEL_PATH", "models/casting_classifier.h5")
+MODEL_PATH = os.getenv("MODEL_PATH", "models/casting_model_v1.h5")
 IMAGE_SIZE = (512, 512)  # Kích thước ảnh input (grayscale 512x512)
 
 def load_model():
