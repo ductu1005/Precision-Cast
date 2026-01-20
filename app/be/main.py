@@ -12,10 +12,12 @@ import uvicorn
 import numpy as np
 from PIL import Image
 import io
+import os
+import httpx
 from typing import Optional, List
 import logging
 
-from model_loader import load_model, predict_image
+# from model_loader import load_model, predict_image
 from database import get_db, init_db, Product, InspectionResult, PredictionLog
 from minio_client import upload_image, init_bucket
 
@@ -40,17 +42,16 @@ app.add_middleware(
 )
 
 # Load model khi khởi động ứng dụng
-model = None
-THRESHOLD = 0.5  # Ngưỡng phân loại
+WORKER_URL = os.getenv("AI_WORKER_URL", "http://ai_worker:8001")
+THRESHOLD = 0.5
 
 @app.on_event("startup")
 async def startup_event():
     """Load model, init database và MinIO khi ứng dụng khởi động"""
-    global model
     try:
         # Load model
-        model = load_model()
-        logger.info("Model loaded successfully")
+        # model = load_model()
+        # logger.info("Model loaded successfully")
         
         # Initialize database
         # init_db()
@@ -78,7 +79,7 @@ async def health_check():
     """Health check endpoint với thông tin model"""
     return {
         "status": "healthy",
-        "model_loaded": model is not None
+        "model_loaded": "casting_model"
     }
 
 @app.post("/predict")
@@ -101,100 +102,95 @@ async def predict(
         JSON response với status (defective/ok), confidence score và inspection_id
     """
     try:
-        # Validate file type
+        # 1. Validate file
         if not file.content_type.startswith('image/'):
-            raise HTTPException(
-                status_code=400,
-                detail="File phải là hình ảnh"
-            )
+            raise HTTPException(status_code=400, detail="File phải là hình ảnh")
         
-        # Đọc ảnh từ file upload
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents))
         
-        # Convert sang RGB nếu cần (xử lý grayscale và RGBA)
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        logger.info(f"Received image: {file.filename}, size: {image.size}")
-        
-        # Dự đoán bằng model
-        if model is None:
-            raise HTTPException(
-                status_code=503,
-                detail="Model chưa được load. Vui lòng thử lại sau."
-            )
-        
-        # Predict với thông tin chi tiết
-        status, confidence, raw_score, inference_time_ms = predict_image(model, image)
-        
-        # Upload ảnh lên MinIO
+        # 2. Upload MinIO (Làm trước để đảm bảo ảnh đã lưu an toàn)
         try:
             image_path = upload_image(contents, file.filename)
         except Exception as e:
-            logger.error(f"Error uploading to MinIO: {e}")
-            image_path = f"error/{file.filename}"  # Fallback path
-        
-        # Tạo hoặc lấy product record
-        product = None
+            logger.error(f"MinIO Upload Error: {e}")
+            raise HTTPException(status_code=500, detail="Lỗi lưu trữ hình ảnh")
+
+        # 3. Tạo record Product (nếu cần)
+        product_id = None
         if product_code or batch_code:
-            # Kiểm tra xem product đã tồn tại chưa
             existing_product = db.query(Product).filter(
                 Product.product_code == product_code,
                 Product.batch_code == batch_code
             ).first()
-            
             if existing_product:
-                product = existing_product
+                product_id = existing_product.id
             else:
-                product = Product(
-                    product_code=product_code,
-                    batch_code=batch_code
-                )
-                db.add(product)
-                db.flush()  # Để lấy product.id
-        
-        # Lưu kết quả inspection vào database
+                new_product = Product(product_code=product_code, batch_code=batch_code)
+                db.add(new_product)
+                db.flush()
+                product_id = new_product.id
+
+        # 4. Lưu Inspection vào DB với trạng thái TẠM (Pending) hoặc NULL
+        # Bước này quan trọng: Lưu lại bằng chứng là đã nhận request
         inspection = InspectionResult(
-            product_id=product.id if product else None,
+            product_id=product_id,
             image_path=image_path,
-            prediction=status,
-            confidence=float(confidence)
+            prediction="PENDING", # Hoặc để null tùy thiết kế DB của bạn
+            confidence=0.0
         )
         db.add(inspection)
-        db.flush()  # Để lấy inspection.id
+        db.commit() # Commit lần 1 để có ID
+        db.refresh(inspection)
         
-        # Lưu prediction log
-        log = PredictionLog(
-            inspection_id=inspection.id,
-            raw_score=raw_score,
-            threshold=THRESHOLD,
-            inference_time_ms=inference_time_ms
-        )
-        db.add(log)
+        logger.info(f"Created inspection ID {inspection.id}, sending to AI Worker...")
+
+        # 5. GỌI SANG AI WORKER (Bước quan trọng nhất)
+        ai_result = None
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Gửi file binary sang worker
+                files = {'file': (file.filename, contents, file.content_type)}
+                response = await client.post(f"{WORKER_URL}/predict", files=files)
+                
+                if response.status_code != 200:
+                    raise Exception(f"Worker returned {response.status_code}: {response.text}")
+                
+                ai_result = response.json() # {"prediction": "OK", "confidence": 0.99}
+                
+        except Exception as e:
+            logger.error(f"Error calling AI Worker: {e}")
+            # Cập nhật trạng thái lỗi
+            inspection.prediction = "ERROR"
+            db.commit()
+            raise HTTPException(status_code=500, detail=f"Lỗi xử lý AI: {str(e)}")
+
+        # 6. Cập nhật kết quả vào DB sau khi có từ Worker
+        inspection.prediction = ai_result['prediction']
+        inspection.confidence = ai_result['confidence']
         
-        # Commit transaction
-        db.commit()
+        # Lưu log (nếu có bảng log)
+        # log = PredictionLog(...) 
+        # db.add(log)
         
-        logger.info(f"Inspection saved: ID={inspection.id}, Status={status}, Confidence={confidence}")
+        db.commit() # Commit lần 2: Xác nhận kết quả
         
-        # Trả về kết quả
+        logger.info(f"Updated inspection ID {inspection.id} with result {inspection.prediction}")
+
+        # 7. Trả về kết quả cuối cùng cho Client
         return JSONResponse({
-            "status": status,
-            "confidence": float(confidence),
+            "status": inspection.prediction,
+            "confidence": float(inspection.confidence) if inspection.confidence is not None else 0.0,
             "inspection_id": inspection.id,
-            "product_id": product.id if product else None
+            "image_path": image_path,
+            "product_id": product_id
         })
-        
+
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error processing image: {e}", exc_info=True)
+        logger.error(f"Unexpected error: {e}", exc_info=True)
         db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Lỗi khi xử lý ảnh: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/inspections")
 async def get_inspections(
