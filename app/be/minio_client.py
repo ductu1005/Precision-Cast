@@ -23,37 +23,61 @@ minio_client = None
 
 
 def get_minio_client():
-    """Lấy MinIO client instance"""
+    """Lấy MinIO client instance
+    
+    Returns:
+        Minio client hoặc None nếu không kết nối được
+    """
     global minio_client
     if minio_client is None:
         try:
+            # Tạo client với timeout ngắn để fail nhanh
+            import urllib3
+            http_client = urllib3.PoolManager(
+                timeout=urllib3.Timeout(connect=2, read=5),
+                retries=urllib3.Retry(total=1, connect=1, read=1, backoff_factor=0.1)
+            )
+            
             minio_client = Minio(
                 MINIO_ENDPOINT,
                 access_key=MINIO_ACCESS_KEY,
                 secret_key=MINIO_SECRET_KEY,
-                secure=MINIO_SECURE
+                secure=MINIO_SECURE,
+                http_client=http_client
             )
-            # Đảm bảo bucket tồn tại
-            init_bucket()
             logger.info("MinIO client initialized successfully")
         except Exception as e:
-            logger.error(f"Error initializing MinIO client: {e}")
-            raise
+            logger.warning(f"Error initializing MinIO client: {e}")
+            return None
     return minio_client
 
 
 def init_bucket():
-    """Khởi tạo bucket nếu chưa tồn tại"""
+    """Khởi tạo bucket nếu chưa tồn tại
+    
+    Returns:
+        bool: True nếu thành công, False nếu có lỗi
+    """
     try:
         client = get_minio_client()
+        if client is None:
+            return False
+        
+        # Test connection nhanh với timeout ngắn
         if not client.bucket_exists(MINIO_BUCKET):
             client.make_bucket(MINIO_BUCKET)
             logger.info(f"Created bucket: {MINIO_BUCKET}")
         else:
             logger.info(f"Bucket {MINIO_BUCKET} already exists")
-    except S3Error as e:
-        logger.error(f"Error creating bucket: {e}")
-        raise
+        return True
+    except Exception as e:
+        error_msg = str(e)
+        if "Connection" in error_msg or "timeout" in error_msg.lower():
+            logger.warning(f"MinIO not available at {MINIO_ENDPOINT}, skipping bucket initialization")
+        else:
+            logger.warning(f"MinIO initialization error: {error_msg}")
+        # Không raise exception để server vẫn có thể chạy mà không có MinIO
+        return False
 
 
 def upload_image(image_data: bytes, filename: str = None) -> str:

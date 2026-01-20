@@ -62,9 +62,24 @@ async def startup_event():
         logger.info("MinIO initialized")
         
     except Exception as e:
-        logger.error(f"Error during startup: {e}")
-        # Trong production, có thể không khởi động nếu không load được model
+        logger.error(f"Error loading model: {e}")
+        # Model là bắt buộc, nếu không load được thì không start server
         raise
+    
+    # Database và MinIO là optional khi chạy standalone (không có Docker)
+    db_initialized = init_db()
+    if db_initialized:
+        logger.info("Database initialized successfully")
+    else:
+        logger.warning("Database not available (will skip DB features)")
+        logger.info("Tip: Start MariaDB with Docker or set DB_HOST environment variable")
+    
+    minio_initialized = init_bucket()
+    if minio_initialized:
+        logger.info("MinIO initialized successfully")
+    else:
+        logger.warning("MinIO not available (will skip image storage)")
+        logger.info("Tip: Start MinIO with Docker or set MINIO_ENDPOINT environment variable")
 
 @app.get("/")
 async def root():
@@ -213,6 +228,12 @@ async def get_inspections(
     Returns:
         Danh sách các inspection results
     """
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database service unavailable. Please ensure MariaDB is running."
+        )
+    
     try:
         query = db.query(InspectionResult).join(Product, InspectionResult.product_id == Product.id, isouter=True)
         
@@ -284,6 +305,12 @@ async def get_product_inspections(
     Returns:
         Danh sách các inspection results của sản phẩm
     """
+    if db is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Database service unavailable. Please ensure MariaDB is running."
+        )
+    
     try:
         # Kiểm tra product có tồn tại không
         product = db.query(Product).filter(Product.id == product_id).first()
@@ -336,6 +363,18 @@ async def get_product_inspections(
 
 
 if __name__ == "__main__":
+    import signal
+    import sys
+    
+    def signal_handler(sig, frame):
+        """Handle Ctrl+C gracefully"""
+        logger.info("\nShutting down server...")
+        sys.exit(0)
+    
+    # Register signal handler for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
@@ -343,4 +382,3 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
-
