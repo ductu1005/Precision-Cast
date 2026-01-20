@@ -5,13 +5,21 @@ Entry point for the application
 
 import streamlit as st
 from PIL import Image
+import os
+import pandas as pd
 
 # Import modules
-from utils.helper import load_css
-from core.api_client import QualityInspectorClient
-from components.sidebar import render_sidebar
-from components.display import show_prediction_result
+try:
+    from utils.helper import load_css
+    from pages.uploadPage import page_upload
+    from pages.statusPage import page_stats_table, page_stats_charts, page_model_evaluation
+except ImportError:
+    # Fallback nếu chưa có module (để code chạy được demo)
+    def load_css(f): pass
+    
 
+
+API_URL = os.getenv("API_URL", "http://backend:8000")
 # 1. Cấu hình trang (Phải đặt đầu tiên)
 st.set_page_config(
     page_title="PrecisionCast - Quality Inspection",
@@ -19,61 +27,48 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+p_upload = st.Page(page_upload, title="Kiểm tra sản phẩm", icon="🚀", default=True)
+p_table  = st.Page(page_stats_table, title="Bảng dữ liệu", icon="📄", url_path="table")
+p_chart  = st.Page(page_stats_charts, title="Biểu đồ phân tích", icon="📈", url_path="charts")
+p_eval   = st.Page(page_model_evaluation, title="Đánh giá hiệu suất", icon="🎯")
 
-# 2. Load CSS & Sidebar
-load_css("style.css")
-render_sidebar()
+nav_structure = {
+    "Vận hành": [p_upload],
+    "Thống kê & Báo cáo": [p_table, p_chart], # Tab mẹ chứa 2 tab con
+    "Quản trị": [p_eval]
+}
 
+pg = st.navigation(nav_structure)
+
+# --- SIDEBAR & MAIN NAVIGATION ---
 def main():
-    # Header
-    st.markdown('<p class="main-header">🔍 PrecisionCast - Quality Inspection System</p>', unsafe_allow_html=True)
+    # --- A. Sidebar Branding (Logo & Caption) ---
+    # st.logo là tính năng mới của 1.46, nó sẽ hiện logo ngay trên menu điều hướng rất đẹp
+    st.logo(
+        "https://img.icons8.com/color/96/000000/industrial-robot.png",
+        icon_image="https://img.icons8.com/color/96/000000/industrial-robot.png",
+        link="https://google.com"
+    )
 
-    # Layout chính: 2 Cột
-    col_upload, col_result = st.columns([1, 1], gap="large")
+    # Các thành phần phụ trong Sidebar (hiện bên dưới menu)
+    with st.sidebar:
+        st.caption("AI Quality Control System v1.0")
+        st.divider()
+        # Lưu ý: Bạn KHÔNG cần vẽ menu ở đây, pg.run() sẽ tự vẽ menu vào sidebar
 
-    # --- Cột trái: Upload ---
-    with col_upload:
-        st.subheader("1. Upload hình ảnh")
-        uploaded_file = st.file_uploader(
-            "Chọn file ảnh (JPG, PNG, BMP)", 
-            type=['jpg', 'jpeg', 'png', 'bmp']
-        )
+    # --- B. Chạy trang hiện tại ---
+    pg.run()
 
-        if uploaded_file:
-            # Hiển thị ảnh
-            image = Image.open(uploaded_file)
-            st.image(image, caption="Preview ảnh đầu vào")
-            st.caption(f"Kích thước: {image.size[0]}x{image.size[1]} px")
-
-    # --- Cột phải: Kết quả ---
-    with col_result:
-        st.subheader("2. Kết quả phân tích")
-        
-        if uploaded_file:
-            # Button trigger
-            if st.button("🚀 Chạy kiểm tra chất lượng", type="primary"):
-                with st.spinner("AI đang phân tích bề mặt đúc..."):
-                    # Gọi API qua Client Service
-                    result = QualityInspectorClient.predict(uploaded_file)
-                    
-                    # Hiển thị kết quả qua Component
-                    if result:
-                        show_prediction_result(result)
-        else:
-            # Placeholder khi chưa có ảnh
-            st.info("👈 Vui lòng upload ảnh ở cột bên trái để bắt đầu.")
-            st.markdown(
-                """
-                <div style="text-align: center; margin-top: 50px; opacity: 0.5;">
-                    <h1>Waiting for input...</h1>
-                    <p>Hệ thống sẵn sàng phân tích</p>
-                </div>
-                """, unsafe_allow_html=True
-            )
-
-    # Footer
+    # --- C. Footer chung (Hiển thị ở cuối mọi trang) ---
     st.markdown("---")
-    st.markdown("<div style='text-align: center; color: grey;'>© 2024 PrecisionCast AI Team</div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div style='text-align: center; color: grey; font-size: 0.8em;'>
+            © 2024 PrecisionCast AI Team | Powered by FastAPI & Streamlit 1.46
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
 
 if __name__ == "__main__":
     main()
