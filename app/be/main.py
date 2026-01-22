@@ -5,7 +5,7 @@ Endpoint: POST /predict - Nhận ảnh và trả về kết quả phân loại
 
 from fastapi import FastAPI, File, UploadFile, HTTPException, Depends, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 import uvicorn
@@ -19,7 +19,7 @@ import logging
 
 # from model_loader import load_model, predict_image
 from database import get_db, init_db, Product, InspectionResult, PredictionLog
-from minio_client import upload_image, init_bucket
+from minio_client import upload_image, init_bucket, get_image, get_image_url
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
@@ -359,6 +359,102 @@ async def get_product_inspections(
         raise HTTPException(
             status_code=500,
             detail=f"Lỗi khi lấy danh sách kiểm tra: {str(e)}"
+        )
+
+
+@app.get("/images/{image_path:path}")
+async def get_image_from_minio(image_path: str):
+    """
+    Endpoint để lấy ảnh từ MinIO và trả về trực tiếp
+    Proxy request qua backend để tránh lỗi SignatureDoesNotMatch khi thay đổi host
+    
+    Args:
+        image_path: Đường dẫn ảnh trong MinIO (object_name)
+                   FastAPI tự động decode URL encoding
+        
+    Returns:
+        Ảnh từ MinIO với content-type phù hợp
+    """
+    try:
+        # Log để debug
+        logger.info(f"Requesting image from MinIO: {image_path}")
+        
+        # Đảm bảo image_path không rỗng
+        if not image_path or image_path.strip() == "":
+            raise HTTPException(status_code=400, detail="image_path không được để trống")
+        
+        # Lấy ảnh từ MinIO dưới dạng bytes
+        image_data = get_image(image_path)
+        
+        # Xác định content type dựa trên extension
+        content_type = "image/jpeg"  # Mặc định
+        if image_path.lower().endswith('.png'):
+            content_type = "image/png"
+        elif image_path.lower().endswith('.gif'):
+            content_type = "image/gif"
+        elif image_path.lower().endswith('.webp'):
+            content_type = "image/webp"
+        
+        logger.info(f"Returning image: {image_path}, size: {len(image_data)} bytes, content-type: {content_type}")
+        
+        # Trả về ảnh với content-type phù hợp
+        from fastapi.responses import Response
+        return Response(
+            content=image_data,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=3600",  # Cache 1 giờ
+                "Content-Disposition": f'inline; filename="{image_path}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting presigned URL from MinIO: {e}", exc_info=True)
+        # Trả về lỗi chi tiết hơn để debug
+        error_detail = str(e)
+        logger.error(f"Full error: {error_detail}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi khi lấy URL ảnh từ MinIO: {error_detail}"
+        )
+
+
+@app.get("/images/url/{image_path:path}")
+async def get_image_url_json(image_path: str):
+    """
+    Endpoint để lấy presigned URL từ MinIO dưới dạng JSON
+    Frontend có thể dùng URL này để hiển thị ảnh trực tiếp từ MinIO
+    
+    Args:
+        image_path: Đường dẫn ảnh trong MinIO (object_name)
+        
+    Returns:
+        JSON với presigned URL
+    """
+    try:
+        logger.info(f"Requesting presigned URL (JSON) for image: {image_path}")
+        
+        if not image_path or image_path.strip() == "":
+            raise HTTPException(status_code=400, detail="image_path không được để trống")
+        
+        # Lấy presigned URL từ MinIO (expire sau 1 giờ)
+        presigned_url = get_image_url(image_path, expires_in_seconds=3600)
+        
+        return {
+            "image_path": image_path,
+            "url": presigned_url,
+            "expires_in": 3600
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting presigned URL: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi khi lấy URL ảnh: {str(e)}"
         )
 
 

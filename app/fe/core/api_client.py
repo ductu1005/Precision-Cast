@@ -66,6 +66,34 @@ class QualityInspectorClient:
         except Exception as e:
             print(f"Unexpected Error: {e}")
             return []
+    
+    @staticmethod
+    @st.cache_data(ttl=3600)  # Cache presigned URL trong 1 giờ (vì presigned URL expire sau 1h)
+    def get_image_url(image_path: str) -> Optional[str]:
+        """
+        Lấy presigned URL từ MinIO để hiển thị ảnh trực tiếp
+        Có cache để tránh gọi API nhiều lần
+        
+        Args:
+            image_path: Đường dẫn ảnh trong MinIO
+            
+        Returns:
+            Presigned URL từ MinIO hoặc None nếu lỗi
+        """
+        try:
+            import urllib.parse
+            encoded_path = urllib.parse.quote(str(image_path), safe='/')
+            response = requests.get(f"{API_URL}/images/url/{encoded_path}", timeout=5)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("url")
+            else:
+                return None
+                
+        except Exception as e:
+            print(f"Error getting image URL: {e}")
+            return None
         
         
 

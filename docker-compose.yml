@@ -54,6 +54,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - MINIO_BUCKET=precisioncast-images
+      - MINIO_PUBLIC_URL=http://10.10.0.140:9000
       - AI_WORKER_URL=http://ai_worker:8001
     volumes:
       - ./models:/app/models
@@ -87,6 +88,7 @@ services:
       - MINIO_ACCESS_KEY=minioadmin
       - MINIO_SECRET_KEY=minioadmin123
       - MINIO_BUCKET=precisioncast-images
+      - MINIO_PUBLIC_URL=http://10.10.0.140:9000
       - AI_WORKER_URL=http://ai_worker:8001
     volumes:
       - ./models:/app/models
@@ -125,8 +127,12 @@ services:
     ports:
       - "8501:8501"
     environment:
-      # frontend gọi qua nginx thay vì gọi thẳng backend
+      # Internal URL cho server-side API calls (từ container)
       - API_URL=http://nginx:8000
+      # Public URL cho client-side (browser) hiển thị ảnh
+      - PUBLIC_API_URL=http://10.10.0.140:8000
+    volumes:
+      - ./app/fe:/app
     depends_on:
       nginx:
         condition: service_started

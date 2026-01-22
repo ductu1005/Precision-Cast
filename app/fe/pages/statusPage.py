@@ -1,8 +1,12 @@
 import streamlit as st
 import pandas as pd
+import os
 
 # Import modules
-from core.api_client import load_inspection_data
+from core.api_client import load_inspection_data, API_URL
+
+# Public API URL cho browser (client-side) - dùng để hiển thị ảnh
+PUBLIC_API_URL = os.getenv("PUBLIC_API_URL", "http://localhost:8000")
 
 def page_stats_table():
     st.markdown("### 📊 Dữ liệu chi tiết")
@@ -16,18 +20,45 @@ def page_stats_table():
     display_df = df.copy()
     display_df['confidence_display'] = display_df['confidence'].apply(lambda x: f"{x*100:.1f}%")
     
+    # Tạo URL ảnh - dùng endpoint redirect (lazy loading)
+    # Chỉ khi click vào link mới gọi API để lấy presigned URL từ MinIO
+    def create_image_url(image_path):
+        """Tạo URL ảnh - endpoint redirect sẽ gọi MinIO khi click"""
+        if pd.isna(image_path) or not image_path:
+            return None
+        import urllib.parse
+        encoded_path = urllib.parse.quote(str(image_path), safe='/')
+        # Endpoint này sẽ redirect đến presigned URL từ MinIO
+        # Chỉ khi click vào link mới gọi API
+        return f"{PUBLIC_API_URL}/images/{encoded_path}"
+    
+    # Tạo URL cho mỗi ảnh (chỉ là URL, chưa gọi API)
+    display_df['image_url'] = display_df['image_path'].apply(create_image_url)
+    
     # Sắp xếp mới nhất trước
     display_df = display_df.sort_values(by='id', ascending=False)
     
+    # Hiển thị bảng với ảnh thumbnail và link
     st.dataframe(
-        display_df[['id', 'prediction', 'confidence_display', 'created_at', 'image_path']],
+        display_df[['id', 'prediction', 'confidence_display', 'created_at', 'image_url']],
         column_config={
             "created_at": st.column_config.DatetimeColumn("Thời gian", format="DD/MM HH:mm"),
-            "image_path": "File Ảnh"
+            "image_url": st.column_config.LinkColumn(
+                "Ảnh",
+                help="Click để mở ảnh trong tab mới",
+                display_text="🔗 Xem ảnh"
+            )
         },
         use_container_width=True,
         hide_index=True
     )
+    
+    # Debug: Hiển thị một vài URL mẫu (có thể xóa sau)
+    if st.checkbox("🔍 Debug: Hiển thị URL ảnh (để kiểm tra)"):
+        st.code(f"API_URL (server-side): {API_URL}")
+        st.code(f"PUBLIC_API_URL (client-side): {PUBLIC_API_URL}")
+        sample_urls = display_df[['image_path', 'image_url']].head(3)
+        st.dataframe(sample_urls, use_container_width=True)
 
 def page_stats_charts():
     """Trang 2.2: Biểu đồ thống kê"""
@@ -164,12 +195,28 @@ def page_model_evaluation():
         
     with c2:
         st.subheader("Danh sách dự đoán sai")
-        wrong_preds = eval_df[~eval_df['is_correct']][['image_path', 'ground_truth', 'prediction', 'confidence']]
+        wrong_preds = eval_df[~eval_df['is_correct']].copy()
         if not wrong_preds.empty:
+            # Tạo URL ảnh - dùng endpoint redirect (nhanh)
+            def create_image_url(image_path):
+                """Tạo URL ảnh - dùng endpoint redirect"""
+                if pd.isna(image_path) or not image_path:
+                    return None
+                import urllib.parse
+                encoded_path = urllib.parse.quote(str(image_path), safe='/')
+                return f"{PUBLIC_API_URL}/images/{encoded_path}"
+            
+            wrong_preds['image_url'] = wrong_preds['image_path'].apply(create_image_url)
+            
             st.dataframe(
-                wrong_preds,
+                wrong_preds[['image_url', 'ground_truth', 'prediction', 'confidence']],
                 column_config={
-                    "confidence": st.column_config.NumberColumn("Confidence", format="%.4f")
+                    "confidence": st.column_config.NumberColumn("Confidence", format="%.4f"),
+                    "image_url": st.column_config.LinkColumn(
+                        "Ảnh",
+                        help="Click để mở ảnh trong tab mới",
+                        display_text="🔗 Xem ảnh"
+                    )
                 },
                 use_container_width=True
             )
