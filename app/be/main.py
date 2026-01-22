@@ -21,7 +21,7 @@ import logging
 
 # from model_loader import load_model, predict_image
 from database import get_db, init_db, Product, InspectionResult, PredictionLog
-from minio_client import upload_image, init_bucket,  get_image_url
+from minio_client import upload_image, init_bucket, get_image_url, get_image
 
 
 # Cấu hình logging
@@ -275,12 +275,17 @@ async def get_inspections(
         for inspection in inspections:
             product = inspection.product if inspection.product else None
             signed_url = get_image_url(inspection.image_path)
+            # Tạo presigned URL cho ảnh
+            signed_url = get_image_url(inspection.image_path) if inspection.image_path else None
+            if not signed_url:
+                logger.warning(f"Could not generate presigned URL for image: {inspection.image_path}")
+            
             results.append({
                 "id": inspection.id,
                 "product_id": inspection.product_id,
                 "product_code": product.product_code if product else None,
                 "batch_code": product.batch_code if product else None,
-                "image_path": signed_url,
+                "image_path": signed_url,  # Presigned URL hoặc None
                 "prediction": inspection.prediction,
                 "confidence": float(inspection.confidence) if inspection.confidence else None,
                 "inspected_at": inspection.inspected_at.isoformat() if inspection.inspected_at else None,
@@ -353,6 +358,62 @@ async def get_inspection_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/images/{image_path:path}")
+async def get_image_from_minio(image_path: str):
+    """
+    Endpoint để proxy ảnh từ MinIO và trả về trực tiếp
+    Tránh lỗi SignatureDoesNotMatch khi dùng presigned URL với thay đổi host
+    
+    Args:
+        image_path: Tên object trong MinIO (object_name)
+                   FastAPI tự động decode URL encoding
+        
+    Returns:
+        Ảnh từ MinIO với content-type phù hợp
+    """
+    try:
+        logger.info(f"Requesting image from MinIO: {image_path}")
+        
+        # Đảm bảo image_path không rỗng
+        if not image_path or image_path.strip() == "":
+            raise HTTPException(status_code=400, detail="image_path không được để trống")
+        
+        # Lấy ảnh từ MinIO dưới dạng bytes
+        image_data = get_image(image_path)
+        
+        # Xác định content type dựa trên extension
+        content_type = "image/jpeg"  # Mặc định
+        if image_path.lower().endswith('.png'):
+            content_type = "image/png"
+        elif image_path.lower().endswith('.gif'):
+            content_type = "image/gif"
+        elif image_path.lower().endswith('.webp'):
+            content_type = "image/webp"
+        
+        logger.info(f"Returning image: {image_path}, size: {len(image_data)} bytes, content-type: {content_type}")
+        
+        # Trả về ảnh với content-type phù hợp
+        from fastapi.responses import Response
+        return Response(
+            content=image_data,
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=3600",  # Cache 1 giờ
+                "Content-Disposition": f'inline; filename="{image_path}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting image from MinIO: {e}", exc_info=True)
+        error_detail = str(e)
+        if "không tồn tại" in error_detail or "NoSuchKey" in error_detail:
+            raise HTTPException(status_code=404, detail=f"Ảnh không tồn tại: {image_path}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi khi lấy ảnh từ MinIO: {error_detail}"
+        )
 
 
 if __name__ == "__main__":

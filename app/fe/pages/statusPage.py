@@ -52,15 +52,23 @@ def page_stats_table():
                 lambda x: f"{x*100:.1f}%" if pd.notnull(x) else "0%"
             )
            
-        # C. Hiển thị Data Editor
+        # C. Xử lý image_path để đảm bảo là URL hợp lệ
+        # Backend trả về image_path là presigned URL, nhưng cần đảm bảo không None
+        if 'image_path' in display_df.columns:
+            # Thay thế None hoặc giá trị rỗng bằng placeholder
+            display_df['image_path'] = display_df['image_path'].apply(
+                lambda x: x if x and str(x).startswith('http') else None
+            )
+        
+        # D. Hiển thị Data Editor
         st.data_editor(
             display_df,
             column_config={
-                # Cột ảnh
+                # Cột ảnh - image_path đã là presigned URL từ backend
                 "image_path": st.column_config.ImageColumn(
                     "Ảnh minh họa",
                     width="small",
-                    help="Ảnh chụp từ camera"
+                    help="Ảnh chụp từ camera (click để xem lớn)"
                 ),
                 # Cột thời gian (Bây giờ đã an toàn vì dữ liệu là datetime object)
                 "created_at": st.column_config.DatetimeColumn(

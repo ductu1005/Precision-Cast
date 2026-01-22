@@ -76,26 +76,60 @@ def upload_image(image_data: bytes, filename: str = None) -> str:
         logger.error(f"Upload error: {e}")
         raise
 
-def get_image_url(object_name: str, expires_in_seconds: int = 3600) -> str:
+def get_image(object_name: str) -> bytes:
     """
-    Tạo Presigned URL và đổi hostname nội bộ thành localhost
+    Lấy ảnh từ MinIO dưới dạng bytes
     """
     try:
         client = get_minio_client()
-        if client is None: return None
+        if client is None:
+            raise Exception("MinIO client not available")
         
-        # 1. Tạo link nội bộ (vd: http://minio:9000/...)
-        url = client.presigned_get_object(
-            MINIO_BUCKET,
-            object_name,
-            expires=timedelta(seconds=expires_in_seconds)
-        )
+        # Lấy object từ MinIO
+        from io import BytesIO
+        response = client.get_object(MINIO_BUCKET, object_name)
+        image_data = response.read()
+        response.close()
+        response.release_conn()
         
-        # 2. Thay thế hostname để trình duyệt truy cập được (http://localhost:9000/...)
-        if MINIO_ENDPOINT in url and MINIO_EXTERNAL_ENDPOINT:
-            url = url.replace(MINIO_ENDPOINT, MINIO_EXTERNAL_ENDPOINT)
-            
-        return url
+        if not image_data or len(image_data) == 0:
+            raise Exception(f"Ảnh rỗng trong MinIO: {object_name}")
+        
+        logger.info(f"Retrieved {len(image_data)} bytes from MinIO: {object_name}")
+        return image_data
+        
+    except S3Error as e:
+        error_code = e.code if hasattr(e, 'code') else 'UNKNOWN'
+        if error_code == 'NoSuchKey':
+            raise Exception(f"Ảnh không tồn tại: {object_name}")
+        raise Exception(f"Lỗi MinIO: {str(e)}")
     except Exception as e:
-        logger.error(f"Error generating URL: {e}")
+        logger.error(f"Error getting image: {e}", exc_info=True)
+        raise
+
+
+def get_image_url(object_name: str, expires_in_seconds: int = 3600) -> str:
+    """
+    Tạo URL để truy cập ảnh qua backend proxy endpoint
+    Thay vì dùng presigned URL (có vấn đề với signature khi thay đổi host),
+    ta sẽ dùng backend endpoint để proxy ảnh từ MinIO
+    """
+    if not object_name:
         return None
+    
+    # URL sẽ là: http://10.10.0.140:8000/images/{object_name}
+    # Backend sẽ proxy ảnh từ MinIO và trả về trực tiếp
+    # Cần import urllib.parse để encode object_name
+    from urllib.parse import quote
+    
+    # Encode object_name để xử lý ký tự đặc biệt
+    encoded_name = quote(object_name, safe='/')
+    
+    # Tạo URL với external endpoint (IP server)
+    # Lưu ý: Đây là URL của backend API, không phải MinIO trực tiếp
+    # Backend sẽ proxy request đến MinIO
+    base_url = f"http://{MINIO_EXTERNAL_ENDPOINT.split(':')[0]}:8000"
+    image_url = f"{base_url}/images/{encoded_name}"
+    
+    logger.info(f"Generated image URL (proxy): {image_url}")
+    return image_url
