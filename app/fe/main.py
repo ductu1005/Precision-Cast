@@ -42,6 +42,14 @@ pg = st.navigation(nav_structure)
 
 # --- SIDEBAR & MAIN NAVIGATION ---
 def main():
+    # --- A. Sidebar Branding (Logo & Caption) ---
+    # st.logo là tính năng mới của 1.46, nó sẽ hiện logo ngay trên menu điều hướng rất đẹp
+    st.logo(
+        "https://img.icons8.com/color/96/000000/industrial-robot.png",
+        icon_image="https://img.icons8.com/color/96/000000/industrial-robot.png",
+        link="https://google.com"
+    )
+
     # Các thành phần phụ trong Sidebar (hiện bên dưới menu)
     with st.sidebar:
         st.caption("AI Quality Control System v1.0")
