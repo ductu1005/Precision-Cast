@@ -6,9 +6,6 @@ from core.api_client import QualityInspectorClient
 from components.display import show_prediction_result
 
 def page_upload():
-    """Trang 1: Upload và kiểm tra (Giữ nguyên giao diện cũ)"""
-    st.markdown('<p class="main-header">🚀 Kiểm tra chất lượng (Live Inference)</p>', unsafe_allow_html=True)
-
     # Layout chính: 2 Cột
     col_upload, col_result = st.columns([1, 1], gap="large")
 
@@ -23,7 +20,7 @@ def page_upload():
         if uploaded_file:
             # Hiển thị ảnh
             image = Image.open(uploaded_file)
-            st.image(image, caption="Preview ảnh đầu vào", use_column_width=True)
+            st.image(image, caption="Preview ảnh đầu vào", width="stretch")
             st.caption(f"Kích thước: {image.size[0]}x{image.size[1]} px")
 
     # --- Cột phải: Kết quả ---
